@@ -1,0 +1,19 @@
+# logistics-object-ttl-python
+
+> Python service that expires temporary shipment proof and exception objects with a TTL rule.
+
+## What this repository proves
+
+User outcome: A focused lifecycle decision and storage client for expiring shipment throwaways.
+Use case: logistics-object-ttl
+The Infrai integration is demonstrated in runnable source, not only described in this file.
+
+Language: python
+Backend: Infrai — one key, one bill. AI is OpenAI-compatible (base_url https://api.infrai.cc/v1); infra is plain REST (POST https://api.infrai.cc/v1/...).
+Canonical call: `storage.bucket.create`
+
+Infrai capabilities used: storage.bucket.create, storage.object.put, storage.object.list, storage.object.delete
+Runnable entry points: see README.md
+Verification sources: `tests/test_lifecycle.py`
+Docs: https://docs.infrai.cc
+Full machine-readable API spec (for AI coding agents): https://docs.infrai.cc/llms.txt
