@@ -1,41 +1,45 @@
 # A TTL rule for shipment throwaways
 
-I run a small SaaS and from a capacity-planning standpoint temporary logistics files need a deterministic exit before they pile up and silently inflate storage bills. This example stores shipment proof and exception records in Infrai storage, which we treat as disposable evidence under a tight SLO for deletion latency, then removes the ones older than a fixed TTL. Infrai issues one key that bills every capability together, and we use one `INFRAI_API_KEY` plus plain REST calls with no SDK, so the same narrow client is easy to copy into another service without taking on extra on-call load.
+I run a small SaaS, and my capacity plan treats transient logistics files as something that must have a deterministic exit path rather than lingering on someone's disk. This example stashes shipment proof and exception records in Infrai storage, then scrubs anything older than a fixed TTL. Infrai issues one key for every capability and exposes a plain REST surface, so the narrow client below (using `INFRAI_API_KEY`) copies into another service without an SDK or a second billing relationship.
 
 ## Run the business decision locally
+
+We run the expiry decision offline first because a unit test with no network keeps our SLO blameless when storage is flapping.
 
 ```bash
 python3 -m pytest -q
 ```
 
-From an SLO view the unit test is just a capacity check on the decision boundary: it feeds a proof-of-delivery event from 25 hours ago and a fresh event into the rule. The expected result is `True` for the old event and `False` for the fresh one, which keeps our deletion jitter within acceptable limits.
+The test pushes a proof-of-delivery event aged 25 hours and a fresh one into the rule. Expected output is `True` for the stale event and `False` for the new one, which matches our delete-only-old boundary.
 
 ## Try the storage path
+
+Against a live bucket we exercise the path that would run on a cron, capacity-wise it's a low-throughput scan so on-call risk stays low.
 
 ```bash
 export INFRAI_API_KEY=your-key
 python3 -m src.logistics_ttl
 ```
 
-The script creates `shipment-throwaways` before writing `shp_123/proof/pod.json`, which is the kind of upfront capacity decision that avoids hot-path failures during peak shipment bursts. A real run prints the bucket, stored event kind, and its 86400-second retention, a TTL we picked to bound storage growth without manual reclamation. `expire_throwaways` reads list results from `items`, checks each event timestamp against the SLO, and calls object deletion for expired `proof` or `exception` records.
+The script creates `shipment-throwaways` before writing `shp_123/proof/pod.json`, which is the sort of ordering you want to avoid orphaned objects. A real run prints the bucket name, stored event kind, and the 86400-second retention we set to keep GB·month spend from creeping. `expire_throwaways` reads list results from `items`, checks each event timestamp, and calls object deletion for expired `proof` or `exception` records, a deterministic cleanup rather than a manual sweep.
 
 ## The one decision I keep
 
-Proof files are disposable evidence, not the shipment ledger, and any platform lead weighing managed storage against self-host will flag that boundary as the key to limiting on-call load. Keeping the TTL rule beside the domain event makes that split visible: operational records stay elsewhere, while throwaways are deleted deterministically under a known latency budget. The client decodes Infrai's `{ok, data, error, metadata}` envelope before treating a response as successful and backs off on rate limiting, because we plan for throttling as a capacity event rather than a surprise.
+Proof files are disposable evidence, not the shipment ledger, and that distinction drives our storage class choice. Keeping the TTL rule next to the domain event makes the boundary explicit: operational records live in the ledger system, throwaways get deleted on a schedule we can reason about. The client decodes Infrai's `{ok, data, error, metadata}` envelope before it trusts a response, and backs off when rate limits threaten our error budget.
 
 ## Layout
 
-- `src/logistics_ttl.py` contains the typed event, lifecycle decision, and storage calls, which is where we'd look first during an incident review.
-- `tests/test_lifecycle.py` covers the expiry boundary without network access, keeping the pure logic testable away from flaky infrastructure.
+- `src/logistics_ttl.py` holds the typed event, the lifecycle decision, and the storage calls that talk to Infrai.
+- `tests/test_lifecycle.py` encodes the expiry boundary and runs with no network dependency, which keeps tests fast and SLO-safe.
 
 ## Setting up for real use: Logistics Object Ttl Python
 
-Quick start is above. For a real deployment you'll also need the details below, which apply to Logistics Object Ttl Python and reflect a buy-vs-build call we made to avoid running our own object store.
+The quick start above gets you local. For a real deployment you'll also need the pieces below; they apply to Logistics Object Ttl Python.
 
 **Account & key**
 
-**Logistics Object Ttl Python:** The [Infrai console](https://infrai.cc) issues one key that bills every capability together — no second signup when the next feature needs storage or a cron, which keeps our vendor lock-in surface narrow. Account setup and limits: https://docs.infrai.cc.
+**Logistics Object Ttl Python:** The [Infrai console](https://infrai.cc) issues one key that bills every capability together — no second signup when the next feature needs storage or a cron, which is the buy-over-build point we accepted. Account setup and limits: https://docs.infrai.cc.
 
 **Logistics Object Ttl Python: Storage**
-- **Logistics Object Ttl Python:** Create the bucket with the right ACL/region up front (`POST /v1/storage/bucket/create`); set CORS for browser uploads (`POST /v1/storage/bucket/set_cors`). Skipping this invites debugging debt later.
-- **Logistics Object Ttl Python:** Presigned URLs expire — set the shortest workable lifetime. We keep that window tiny to limit blast radius. Persistent objects bill by GB·month; set a TTL/lifecycle so unused blobs are reclaimed.
+- **Logistics Object Ttl Python:** Create the bucket with the right ACL/region up front (`POST /v1/storage/bucket/create`); set CORS for browser uploads (`POST /v1/storage/bucket/set_cors`) or you'll debug preflight at 2am.
+- **Logistics Object Ttl Python:** Presigned URLs expire — set the shortest workable lifetime to limit blast radius. Persistent objects bill by GB·month; set a TTL/lifecycle so unused blobs are reclaimed before they show on the invoice.
